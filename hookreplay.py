@@ -1,0 +1,139 @@
+"""Local synthetic webhook capture and replay. Python 3.10+, no dependencies."""
+import argparse
+import http.client
+import json
+import sqlite3
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlsplit
+
+MAX_BODY = 1024 * 1024
+SAFE_HEADERS = {'content-type', 'x-event-type'}
+
+
+class Store:
+    def __init__(self, path):
+        self.path = path
+        with self.connect() as conn:
+            conn.execute('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, created TEXT, headers TEXT, body BLOB)')
+            conn.execute('CREATE TABLE IF NOT EXISTS attempts (id INTEGER PRIMARY KEY, event_id INTEGER, created TEXT, target TEXT, status INTEGER)')
+
+    def connect(self):
+        return sqlite3.connect(self.path)
+
+    def capture(self, headers, body):
+        safe = {k.lower(): v for k, v in headers.items() if k.lower() in SAFE_HEADERS}
+        with self.connect() as conn:
+            result = conn.execute('INSERT INTO events(created,headers,body) VALUES (?,?,?)',
+                                  (datetime.now(timezone.utc).isoformat(), json.dumps(safe), body))
+            return result.lastrowid
+
+    def get(self, event_id):
+        with self.connect() as conn:
+            row = conn.execute('SELECT id,created,headers,body FROM events WHERE id=?', (event_id,)).fetchone()
+        if row is None:
+            raise ValueError('Event not found')
+        return {'id': row[0], 'created': row[1], 'headers': json.loads(row[2]), 'body': row[3]}
+
+    def list(self):
+        with self.connect() as conn:
+            return conn.execute('SELECT id,created,length(body) FROM events ORDER BY id DESC LIMIT 100').fetchall()
+
+
+def server(store, port=8081):
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            if self.path != '/capture':
+                self.send_error(404)
+                return
+            if self.headers.get('Transfer-Encoding'):
+                self.send_error(400, 'Chunked encoding is unsupported')
+                return
+            try:
+                length = int(self.headers.get('Content-Length', '-1'))
+            except ValueError:
+                length = -1
+            if not 0 <= length <= MAX_BODY:
+                self.send_error(413, 'A Content-Length between 0 and 1 MiB is required')
+                return
+            self.connection.settimeout(5)
+            try:
+                body = self.rfile.read(length)
+            except TimeoutError:
+                self.send_error(408)
+                return
+            if len(body) != length:
+                self.send_error(400, 'Incomplete body')
+                return
+            event_id = store.capture(dict(self.headers), body)
+            payload = json.dumps({'id': event_id}).encode()
+            self.send_response(201)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+    return ThreadingHTTPServer(('127.0.0.1', port), Handler)
+
+
+def replay(store, event_id, target):
+    url = urlsplit(target)
+    if url.scheme != 'http' or url.hostname != '127.0.0.1' or url.username or url.password or url.fragment:
+        raise ValueError('Replay target must be an HTTP URL on 127.0.0.1 without credentials or fragments')
+    event = store.get(event_id)
+    connection = http.client.HTTPConnection('127.0.0.1', url.port or 80, timeout=5)
+    try:
+        path = url.path or '/'
+        if url.query:
+            path += '?' + url.query
+        connection.request('POST', path, body=event['body'], headers=event['headers'])
+        response = connection.getresponse()
+        status = response.status
+        with store.connect() as conn:
+            conn.execute('INSERT INTO attempts(event_id,created,target,status) VALUES (?,?,?,?)',
+                         (event_id, datetime.now(timezone.utc).isoformat(), target, status))
+        return status
+    finally:
+        connection.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--db', default='hookreplay.sqlite')
+    commands = parser.add_subparsers(dest='command', required=True)
+    serve = commands.add_parser('serve')
+    serve.add_argument('--port', type=int, default=8081)
+    commands.add_parser('list')
+    inspect = commands.add_parser('inspect')
+    inspect.add_argument('id', type=int)
+    send = commands.add_parser('replay')
+    send.add_argument('id', type=int)
+    send.add_argument('target')
+    args = parser.parse_args()
+    store = Store(args.db)
+    if args.command == 'serve':
+        instance = server(store, args.port)
+        print(f'Capturing synthetic requests at http://127.0.0.1:{instance.server_port}/capture', flush=True)
+        try:
+            instance.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            instance.server_close()
+    elif args.command == 'list':
+        print(json.dumps(store.list(), indent=2))
+    elif args.command == 'inspect':
+        event = store.get(args.id)
+        event['body'] = event['body'].decode('utf-8', errors='replace')
+        print(json.dumps(event, indent=2))
+    else:
+        status = replay(store, args.id, args.target)
+        print(json.dumps({'http_status': status}))
+        if not 200 <= status < 300:
+            raise SystemExit(1)
+
+
+if __name__ == '__main__':
+    main()
