@@ -37,9 +37,22 @@ python3 hookreplay.py compare 1 2
 
 Each replay stores up to 64 KiB of raw response bytes, HTTP status, Content-Type and Content-Encoding. `response` outputs binary-safe base64. `compare BASELINE CANDIDATE` reports which of status, selected headers and exact body bytes changed, and both body sizes. Other headers (including Date and cookies) are excluded. Comparison exits 0 for a match and 1 for differences or invalid input; errors are JSON on stderr, comparison reports are JSON on stdout.
 
-Both attempts must belong to the same event and have complete captured responses. Truncated, prematurely closed, failed or legacy uncaptured responses cannot be compared. Replay may return a 2xx status even when capture is incomplete: inspect `response_complete` or use `compare` as the regression gate. Any complete HTTP status can serve as a baseline, including expected 4xx/5xx responses. Bodies are compared literally without decompression, JSON normalization or ignored fields. This verifies response equality, not application-side correctness. The five-second socket timeout applies to individual network operations, not the whole response duration.
+Both attempts must belong to the same event and have complete captured responses. Truncated, prematurely closed, failed or legacy uncaptured responses cannot be compared. Replay may return a 2xx status even when capture is incomplete: inspect `response_complete` or use `compare` as the regression gate. Any complete HTTP status can serve as a baseline, including expected 4xx/5xx responses. By default bodies are compared literally; opt into JSON mode below for structured comparisons. This verifies response equality, not application-side correctness. The five-second socket timeout applies to individual network operations, not the whole response duration.
 
-## Portable fixtures
+## Structured JSON comparison
+
+```sh
+python3 hookreplay.py compare 1 2 --json
+python3 hookreplay.py compare 1 2 --json --ignore /metadata/timestamp --ignore /requestId
+```
+
+JSON mode compares parsed bodies: whitespace and object-key order do not matter, numbers compare by value, and arrays compare by position. Booleans remain distinct from numbers. Differences identify JSON Pointer paths and kinds (`added`, `removed`, `changed`, `type_changed`), with up to 100 entries and a total count. Values are omitted from the report. An empty path denotes a difference at the document root.
+
+`--ignore` skips an exact path and its entire subtree on either side, including additions or removals. It requires `--json`. Use `/items/0` for an array element, `~1` for a slash in a key and `~0` for a tilde. Wildcards and ignoring the document root are unsupported; unmatched paths have no effect. Ignore rules are listed in the report. Status and selected response headers are still compared.
+
+Malformed JSON, duplicate keys, NaN/Infinity, excessive nesting and compressed response bodies are rejected. Capture completeness requirements still apply. Default comparison remains byte-exact. JSON mode does not persistently modify the captured response or baseline.
+
+## Portable fixture commands
 
 ```sh
 python3 hookreplay.py export 1 build-finished.json

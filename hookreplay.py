@@ -7,6 +7,7 @@ import sqlite3
 import sys
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -121,14 +122,87 @@ class Store:
         return [dict(row) for row in rows]
 
 
-def compare(store, baseline_id, candidate_id):
+def json_differences(left, right, ignored):
+    differences = []
+    missing = object()
+
+    def walk(a, b, path):
+        if path in ignored:
+            return
+        if a is missing or b is missing:
+            differences.append({'path': path, 'kind': 'added' if a is missing else 'removed'})
+        elif isinstance(a, dict) and isinstance(b, dict):
+            for key in sorted(a.keys() | b.keys()):
+                escaped = key.replace('~', '~0').replace('/', '~1')
+                walk(a.get(key, missing), b.get(key, missing), path + '/' + escaped)
+        elif isinstance(a, list) and isinstance(b, list):
+            for index in range(max(len(a), len(b))):
+                walk(a[index] if index < len(a) else missing,
+                     b[index] if index < len(b) else missing, path + '/' + str(index))
+        elif (isinstance(a, bool) != isinstance(b, bool) or
+              (type(a) is not type(b) and not (type(a) in (int, float) and type(b) in (int, float)))):
+            differences.append({'path': path, 'kind': 'type_changed'})
+        elif a != b:
+            differences.append({'path': path, 'kind': 'changed'})
+    walk(left, right, '')
+    return differences
+
+
+def parse_json_body(body):
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('Duplicate JSON object key')
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        raise ValueError(f'Invalid JSON constant: {value}')
+    try:
+        return json.loads(body, object_pairs_hook=unique_object, parse_constant=reject_constant,
+                          parse_int=Decimal, parse_float=Decimal)
+    except (ValueError, RecursionError) as error:
+        raise ValueError(f'Response is not supported valid JSON: {error}') from error
+
+
+def compare(store, baseline_id, candidate_id, json_mode=False, ignored=()):
+    if ignored and not json_mode:
+        raise ValueError('--ignore requires --json')
+    for pointer in ignored:
+        if not pointer.startswith('/'):
+            raise ValueError('Ignored fields must use non-root JSON Pointers such as /metadata/time')
+        for part in pointer.split('/')[1:]:
+            index = 0
+            while index < len(part):
+                if part[index] == '~':
+                    if index + 1 == len(part) or part[index + 1] not in '01':
+                        raise ValueError('Invalid JSON Pointer escape; use ~0 or ~1')
+                    index += 1
+                index += 1
     baseline, candidate = store.attempt(baseline_id), store.attempt(candidate_id)
     if baseline['event_id'] != candidate['event_id']:
         raise ValueError('Comparison requires attempts for the same captured event')
     if any(row['response_complete'] != 1 or row['error'] for row in (baseline, candidate)):
         raise ValueError('Both attempts must have complete captured responses without network errors')
     changed = [name for name in ('status', 'response_headers', 'response_body') if baseline[name] != candidate[name]]
-    return {'baseline': baseline_id, 'candidate': candidate_id, 'match': not changed,
+    details = {}
+    if json_mode:
+        if any(row['response_headers'].get('content-encoding', 'identity').lower() != 'identity'
+               for row in (baseline, candidate)):
+            raise ValueError('JSON comparison requires uncompressed response bodies')
+        left, right = (parse_json_body(row['response_body']) for row in (baseline, candidate))
+        try:
+            differences = json_differences(left, right, set(ignored))
+        except RecursionError as error:
+            raise ValueError('JSON nesting is too deep to compare') from error
+        changed = [name for name in changed if name != 'response_body']
+        if differences:
+            changed.append('response_body')
+        details = {'mode': 'json', 'ignored': sorted(set(ignored)),
+                   'differences': differences[:100], 'difference_count': len(differences),
+                   'differences_truncated': len(differences) > 100}
+    return {'baseline': baseline_id, 'candidate': candidate_id, 'match': not changed, **details,
             'changed': changed, 'baseline_bytes': len(baseline['response_body']),
             'candidate_bytes': len(candidate['response_body'])}
 
@@ -220,6 +294,8 @@ def main():
     diff = commands.add_parser('compare', help='Compare two complete responses for the same event')
     diff.add_argument('baseline', type=int)
     diff.add_argument('candidate', type=int)
+    diff.add_argument('--json', action='store_true', dest='json_mode', help='Compare parsed JSON bodies')
+    diff.add_argument('--ignore', action='append', default=[], metavar='POINTER', help='Ignore an exact JSON Pointer subtree; repeatable, requires --json')
     export = commands.add_parser('export', help='Export an event to a new portable JSON fixture')
     export.add_argument('id', type=int)
     export.add_argument('file')
@@ -253,7 +329,7 @@ def main():
         result['body_base64'] = base64.b64encode(body).decode('ascii') if body is not None else None
         print(json.dumps(result, indent=2))
     elif args.command == 'compare':
-        result = compare(store, args.baseline, args.candidate)
+        result = compare(store, args.baseline, args.candidate, args.json_mode, args.ignore)
         print(json.dumps(result, indent=2))
         if not result['match']:
             raise SystemExit(1)
