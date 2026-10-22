@@ -52,6 +52,32 @@ class BaselineTest(unittest.TestCase):
         self.assertIn('Diff truncated', readable_diff(self.store, a, b))
         self.assertFalse(compare(self.store, a, b)['match'])
 
+    def test_literal_escape_text_cannot_hide_control_changes(self):
+        for control, literal in [(b'\x1b\n', b'\\x1b\n'), (b'\t\n', b'\\t\n'),
+                                 (b'\r\n', b'\\r\n')]:
+            with self.subTest(control=control):
+                a, b = self.attempt(control), self.attempt(literal)
+                diff = readable_diff(self.store, a, b)
+                self.assertTrue(diff)
+                self.assertIn('+\\\\', diff)
+                self.assertFalse(compare(self.store, a, b)['match'])
+
+    def test_unicode_diff_is_bounded_in_bytes_including_marker(self):
+        a = self.attempt(('界' * 4000 + '\n').encode())
+        b = self.attempt(('語' * 4000 + '\n').encode())
+        diff = readable_diff(self.store, a, b)
+        self.assertIn('Diff truncated', diff)
+        self.assertLessEqual(len(diff.encode('utf-8')), 16384)
+        self.assertFalse(compare(self.store, a, b)['match'])
+
+    def test_line_limit_includes_marker_and_newline_annotations(self):
+        a = self.attempt(b'a\n' * 195 + b'last')
+        b = self.attempt(b'b\n' * 195 + b'end')
+        diff = readable_diff(self.store, a, b)
+        self.assertIn('Diff truncated', diff)
+        self.assertLessEqual(len(diff.splitlines()), 200)
+        self.assertLessEqual(len(diff.encode('utf-8')), 16384)
+
     def test_cli_named_baseline_and_diff(self):
         a, b = self.attempt(b'old\n'), self.attempt(b'new\n')
         prefix = [sys.executable, 'hookreplay.py', '--db', self.store.path]

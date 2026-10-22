@@ -63,7 +63,7 @@ python3 hookreplay.py compare stable 2 --profile comparison.json
 
 Names persist in the selected SQLite database and identify one complete response attempt. Names start with a letter and contain up to 64 letters, digits, hyphens or underscores. Existing names cannot be replaced; use a new name for a revised baseline. Comparing still requires the same event and complete responses. Numeric attempt IDs remain supported.
 
-`--text-diff` uses exact byte comparison and prints the JSON result followed by a readable unified diff. It requires UTF-8, uncompressed responses and cannot be combined with JSON mode (including JSON profiles). Control characters are escaped. Missing final newlines are shown explicitly. Display is capped at 200 diff lines/16 KiB; bodies exceeding 2000 lines omit the diff. These display limits do not affect the full byte comparison or exit code. Omit `--text-diff` for machine-readable JSON-only output.
+`--text-diff` uses exact byte comparison and prints the JSON result followed by a readable unified diff. It requires UTF-8, uncompressed responses and cannot be combined with JSON mode (including JSON profiles). Control characters and literal backslashes are escaped so they remain distinguishable. Missing final newlines are shown explicitly. The diff display is capped at 200 lines/16 KiB of UTF-8, including annotations and the truncation notice; bodies exceeding 2000 lines omit the diff. These display limits do not affect the full byte comparison or exit code. Omit `--text-diff` for machine-readable JSON-only output.
 
 ## Reusable comparison rules
 

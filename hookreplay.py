@@ -161,8 +161,10 @@ def readable_diff(store, baseline, candidate):
             text = row['response_body'].decode('utf-8')
         except UnicodeDecodeError as error:
             raise ValueError('Text diffs require UTF-8 bodies') from error
-        # Escape terminal control characters, preserve line boundaries, show CR explicitly.
-        text = ''.join(char if char == '\n' or char.isprintable() else repr(char)[1:-1] for char in text)
+        # Escape backslashes too, so literal escape text cannot hide a change.
+        text = ''.join('\\\\' if char == '\\' else
+                       char if char == '\n' or char.isprintable() else repr(char)[1:-1]
+                       for char in text)
         lines = text.splitlines(keepends=True)
         if lines and not lines[-1].endswith('\n'):
             lines[-1] += '\n\\ No newline at end of file\n'
@@ -171,12 +173,22 @@ def readable_diff(store, baseline, candidate):
         texts.append(lines)
     output = []
     size = 0
+    line_count = 0
+    marker = '[Diff truncated; comparison used complete bodies.]\n'
     for line in difflib.unified_diff(*texts, fromfile=f'baseline-{baseline}', tofile=f'candidate-{candidate}'):
-        size += len(line)
-        if len(output) >= 200 or size > 16384:
-            output.append('[Diff truncated; comparison used complete bodies.]\n')
+        encoded_size = len(line.encode('utf-8'))
+        display_lines = line.count('\n')
+        if line_count + display_lines > 200 or size + encoded_size > 16384:
+            # The marker itself must fit both limits, including newline annotations.
+            while output and (line_count + 1 > 200 or size + len(marker.encode('utf-8')) > 16384):
+                removed = output.pop()
+                size -= len(removed.encode('utf-8'))
+                line_count -= removed.count('\n')
+            output.append(marker)
             break
         output.append(line)
+        size += encoded_size
+        line_count += display_lines
     return ''.join(output)
 
 
