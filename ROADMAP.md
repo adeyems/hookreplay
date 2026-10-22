@@ -4,7 +4,8 @@ First milestone: persistent POST capture, inspection, local replay and HTTP atte
 
 Remaining work estimates are rough engineering estimates, not time already worked:
 
-- Replay attempt inspection, network-error records and cancellation: 5-8 hours.
+- Completed: replay attempt inspection, network-error records and migration of existing databases.
+- Cancellation and recovery of interrupted attempts: 3-5 hours.
 - JSON Schema contract checks with useful field-level diagnostics: 6-10 hours.
 - Deterministic duplicate, delay and reordering scenarios: 8-12 hours.
 - Response capture, bounded body diffs and baseline comparison: 6-10 hours.

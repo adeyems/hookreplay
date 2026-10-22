@@ -2,6 +2,10 @@ import http.client
 import json
 import tempfile
 import threading
+import sqlite3
+import socket
+import subprocess
+import sys
 import unittest
 from pathlib import Path
 
@@ -62,6 +66,42 @@ class WorkflowTest(unittest.TestCase):
         self.assertEqual(self.post(b'', headers={'Content-Length': '1048577'})[0], 413)
         self.assertEqual(self.post(b'', path='/unknown')[0], 404)
         self.assertEqual(self.store.list(), [])
+
+    def test_network_failure_persists_and_cli_inspects_it(self):
+        event_id = self.store.capture({}, b'synthetic')
+        # Bound but not listening: refusal or timeout depending on the OS.
+        with socket.socket() as reserved:
+            reserved.bind(('127.0.0.1', 0))
+            target = f'http://127.0.0.1:{reserved.getsockname()[1]}/receive'
+            result = subprocess.run([sys.executable, 'hookreplay.py', '--db', self.path,
+                                     'replay', str(event_id), target], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('error', json.loads(result.stderr))
+        result = subprocess.run([sys.executable, 'hookreplay.py', '--db', self.path,
+                                 'attempts', str(event_id)], capture_output=True, text=True, check=True)
+        attempts = json.loads(result.stdout)
+        self.assertEqual(len(attempts), 1)
+        self.assertIsNone(attempts[0]['status'])
+        self.assertTrue(attempts[0]['error'].startswith(('ConnectionRefusedError:', 'TimeoutError:')))
+        self.assertEqual(attempts[0]['target'], target)
+
+    def test_attempt_filter_and_http_status(self):
+        first = self.store.capture({}, b'first')
+        second = self.store.capture({}, b'second')
+        replay(self.store, first, f'http://127.0.0.1:{self.http.server_port}/missing')
+        self.assertEqual(self.store.attempts(first)[0]['status'], 404)
+        self.assertIsNone(self.store.attempts(first)[0]['error'])
+        self.assertEqual(self.store.attempts(second), [])
+
+    def test_upgrade_preserves_legacy_attempts(self):
+        legacy = str(Path(self.temp.name) / 'legacy.sqlite')
+        with sqlite3.connect(legacy) as conn:
+            conn.execute('CREATE TABLE attempts (id INTEGER PRIMARY KEY, event_id INTEGER, created TEXT, target TEXT, status INTEGER)')
+            conn.execute("INSERT INTO attempts VALUES (1,1,'2026-10-22','http://127.0.0.1/',201)")
+        migrated = Store(legacy)
+        event_id = migrated.capture({}, b'fixture')
+        self.assertEqual(Store(legacy).attempts(event_id)[0]['status'], 201)
+        self.assertIsNone(migrated.attempts(event_id)[0]['error'])
 
 
 if __name__ == '__main__':

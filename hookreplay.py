@@ -3,6 +3,7 @@ import argparse
 import http.client
 import json
 import sqlite3
+import sys
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -17,6 +18,9 @@ class Store:
         with self.connect() as conn:
             conn.execute('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, created TEXT, headers TEXT, body BLOB)')
             conn.execute('CREATE TABLE IF NOT EXISTS attempts (id INTEGER PRIMARY KEY, event_id INTEGER, created TEXT, target TEXT, status INTEGER)')
+            columns = {row[1] for row in conn.execute('PRAGMA table_info(attempts)')}
+            if 'error' not in columns:
+                conn.execute('ALTER TABLE attempts ADD COLUMN error TEXT')
 
     def connect(self):
         return sqlite3.connect(self.path)
@@ -38,6 +42,19 @@ class Store:
     def list(self):
         with self.connect() as conn:
             return conn.execute('SELECT id,created,length(body) FROM events ORDER BY id DESC LIMIT 100').fetchall()
+
+    def record_attempt(self, event_id, target, status=None, error=None):
+        with self.connect() as conn:
+            conn.execute('INSERT INTO attempts(event_id,created,target,status,error) VALUES (?,?,?,?,?)',
+                         (event_id, datetime.now(timezone.utc).isoformat(), target, status, error))
+
+    def attempts(self, event_id):
+        self.get(event_id)
+        with self.connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute('SELECT * FROM attempts WHERE event_id=? ORDER BY id DESC LIMIT 100',
+                                (event_id,)).fetchall()
+        return [dict(row) for row in rows]
 
 
 def server(store, port=8081):
@@ -91,10 +108,11 @@ def replay(store, event_id, target):
         connection.request('POST', path, body=event['body'], headers=event['headers'])
         response = connection.getresponse()
         status = response.status
-        with store.connect() as conn:
-            conn.execute('INSERT INTO attempts(event_id,created,target,status) VALUES (?,?,?,?)',
-                         (event_id, datetime.now(timezone.utc).isoformat(), target, status))
+        store.record_attempt(event_id, target, status=status)
         return status
+    except (OSError, http.client.HTTPException) as error:
+        store.record_attempt(event_id, target, error=f'{type(error).__name__}: {error}')
+        raise
     finally:
         connection.close()
 
@@ -108,6 +126,8 @@ def main():
     commands.add_parser('list')
     inspect = commands.add_parser('inspect')
     inspect.add_argument('id', type=int)
+    attempts = commands.add_parser('attempts', help='Show the latest 100 replay attempts for an event')
+    attempts.add_argument('id', type=int)
     send = commands.add_parser('replay')
     send.add_argument('id', type=int)
     send.add_argument('target')
@@ -128,6 +148,8 @@ def main():
         event = store.get(args.id)
         event['body'] = event['body'].decode('utf-8', errors='replace')
         print(json.dumps(event, indent=2))
+    elif args.command == 'attempts':
+        print(json.dumps(store.attempts(args.id), indent=2))
     else:
         status = replay(store, args.id, args.target)
         print(json.dumps({'http_status': status}))
@@ -136,4 +158,8 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except (ValueError, OSError, http.client.HTTPException, sqlite3.Error) as error:
+        print(json.dumps({'error': str(error)}), file=sys.stderr)
+        raise SystemExit(1)
