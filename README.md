@@ -24,7 +24,20 @@ The example replay creates a second capture, demonstrating byte-preserving repla
 
 POST capture only, 1 MiB maximum body, HTTP replay to literal 127.0.0.1 only, five-second network timeout, no automatic retries or redirects. Only Content-Type and X-Event-Type headers are retained. Bodies are stored verbatim: this is not a redaction system. Use synthetic payloads only. Request paths and query strings are not captured. The inspector displays text; binary bodies remain intact in storage and replay.
 
-`attempts ID` shows the latest 100 attempts, newest first, with target, UTC time, HTTP status or network error. Network/protocol failures have a null status and a recorded error. HTTP errors retain their status. Replay exits with code 1 for network errors and non-2xx responses. Existing databases upgrade automatically while preserving records. Response bodies, interrupted-process recovery and cancellation are not yet supported; an HTTP status means response headers arrived, not that an application-side operation succeeded.
+`attempts ID` shows the latest 100 attempts, newest first, with target, UTC time, HTTP status, network error, captured response size and completeness. Failures before receiving headers have a null status; later failures preserve the received status. Replay exits with code 1 for network errors and non-2xx responses. Existing databases upgrade automatically while preserving records. Interrupted-process recovery and cancellation are not yet supported.
+
+## Response comparison
+
+Replay the same event against your baseline and modified local endpoint, then use the attempt IDs from `attempts`:
+
+```sh
+python3 hookreplay.py response 1
+python3 hookreplay.py compare 1 2
+```
+
+Each replay stores up to 64 KiB of raw response bytes, HTTP status, Content-Type and Content-Encoding. `response` outputs binary-safe base64. `compare BASELINE CANDIDATE` reports which of status, selected headers and exact body bytes changed, and both body sizes. Other headers (including Date and cookies) are excluded. Comparison exits 0 for a match and 1 for differences or invalid input; errors are JSON on stderr, comparison reports are JSON on stdout.
+
+Both attempts must belong to the same event and have complete captured responses. Truncated, prematurely closed, failed or legacy uncaptured responses cannot be compared. Replay may return a 2xx status even when capture is incomplete: inspect `response_complete` or use `compare` as the regression gate. Any complete HTTP status can serve as a baseline, including expected 4xx/5xx responses. Bodies are compared literally without decompression, JSON normalization or ignored fields. This verifies response equality, not application-side correctness. The five-second socket timeout applies to individual network operations, not the whole response duration.
 
 ## Portable fixtures
 

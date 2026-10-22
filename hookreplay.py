@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 MAX_BODY = 1024 * 1024
 SAFE_HEADERS = {'content-type', 'x-event-type'}
 MAX_FIXTURE = 2 * MAX_BODY
+MAX_RESPONSE = 64 * 1024
 
 
 def export_fixture(store, event_id, path):
@@ -62,6 +63,10 @@ class Store:
             columns = {row[1] for row in conn.execute('PRAGMA table_info(attempts)')}
             if 'error' not in columns:
                 conn.execute('ALTER TABLE attempts ADD COLUMN error TEXT')
+            for name, kind in [('response_headers', 'TEXT'), ('response_body', 'BLOB'),
+                               ('response_complete', 'INTEGER')]:
+                if name not in columns:
+                    conn.execute(f'ALTER TABLE attempts ADD COLUMN {name} {kind}')
 
     @contextmanager
     def connect(self):
@@ -90,18 +95,42 @@ class Store:
         with self.connect() as conn:
             return conn.execute('SELECT id,created,length(body) FROM events ORDER BY id DESC LIMIT 100').fetchall()
 
-    def record_attempt(self, event_id, target, status=None, error=None):
+    def record_attempt(self, event_id, target, status=None, error=None,
+                       headers=None, body=None, complete=None):
         with self.connect() as conn:
-            conn.execute('INSERT INTO attempts(event_id,created,target,status,error) VALUES (?,?,?,?,?)',
-                         (event_id, datetime.now(timezone.utc).isoformat(), target, status, error))
+            conn.execute('INSERT INTO attempts(event_id,created,target,status,error,response_headers,response_body,response_complete) VALUES (?,?,?,?,?,?,?,?)',
+                         (event_id, datetime.now(timezone.utc).isoformat(), target, status, error,
+                          json.dumps(headers) if headers is not None else None, body, complete))
+
+    def attempt(self, attempt_id):
+        with self.connect() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute('SELECT * FROM attempts WHERE id=?', (attempt_id,)).fetchone()
+        if row is None:
+            raise ValueError('Attempt not found')
+        result = dict(row)
+        result['response_headers'] = json.loads(result['response_headers']) if result['response_headers'] is not None else None
+        return result
 
     def attempts(self, event_id):
         self.get(event_id)
         with self.connect() as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute('SELECT * FROM attempts WHERE event_id=? ORDER BY id DESC LIMIT 100',
+            rows = conn.execute('SELECT id,event_id,created,target,status,error,response_complete,length(response_body) AS response_bytes FROM attempts WHERE event_id=? ORDER BY id DESC LIMIT 100',
                                 (event_id,)).fetchall()
         return [dict(row) for row in rows]
+
+
+def compare(store, baseline_id, candidate_id):
+    baseline, candidate = store.attempt(baseline_id), store.attempt(candidate_id)
+    if baseline['event_id'] != candidate['event_id']:
+        raise ValueError('Comparison requires attempts for the same captured event')
+    if any(row['response_complete'] != 1 or row['error'] for row in (baseline, candidate)):
+        raise ValueError('Both attempts must have complete captured responses without network errors')
+    changed = [name for name in ('status', 'response_headers', 'response_body') if baseline[name] != candidate[name]]
+    return {'baseline': baseline_id, 'candidate': candidate_id, 'match': not changed,
+            'changed': changed, 'baseline_bytes': len(baseline['response_body']),
+            'candidate_bytes': len(candidate['response_body'])}
 
 
 def server(store, port=8081):
@@ -148,6 +177,7 @@ def replay(store, event_id, target):
         raise ValueError('Replay target must be an HTTP URL on 127.0.0.1 without credentials or fragments')
     event = store.get(event_id)
     connection = http.client.HTTPConnection('127.0.0.1', url.port or 80, timeout=5)
+    status, headers, body, complete = None, None, None, False
     try:
         path = url.path or '/'
         if url.query:
@@ -155,10 +185,20 @@ def replay(store, event_id, target):
         connection.request('POST', path, body=event['body'], headers=event['headers'])
         response = connection.getresponse()
         status = response.status
-        store.record_attempt(event_id, target, status=status)
+        headers = {key: response.getheader(key) for key in ('content-type', 'content-encoding') if response.getheader(key) is not None}
+        body = response.read(MAX_RESPONSE + 1)
+        complete = len(body) <= MAX_RESPONSE
+        declared = response.getheader('content-length')
+        if declared is not None and (not declared.isdecimal() or int(declared) != len(body)):
+            complete = False
+        store.record_attempt(event_id, target, status=status, headers=headers,
+                             body=body[:MAX_RESPONSE], complete=complete)
         return status
     except (OSError, http.client.HTTPException) as error:
-        store.record_attempt(event_id, target, error=f'{type(error).__name__}: {error}')
+        if isinstance(error, http.client.IncompleteRead):
+            body = error.partial[:MAX_RESPONSE]
+        store.record_attempt(event_id, target, status=status, error=f'{type(error).__name__}: {error}',
+                             headers=headers, body=body, complete=False)
         raise
     finally:
         connection.close()
@@ -175,6 +215,11 @@ def main():
     inspect.add_argument('id', type=int)
     attempts = commands.add_parser('attempts', help='Show the latest 100 replay attempts for an event')
     attempts.add_argument('id', type=int)
+    detail = commands.add_parser('response', help='Inspect a captured response by attempt ID')
+    detail.add_argument('id', type=int)
+    diff = commands.add_parser('compare', help='Compare two complete responses for the same event')
+    diff.add_argument('baseline', type=int)
+    diff.add_argument('candidate', type=int)
     export = commands.add_parser('export', help='Export an event to a new portable JSON fixture')
     export.add_argument('id', type=int)
     export.add_argument('file')
@@ -202,6 +247,16 @@ def main():
         print(json.dumps(event, indent=2))
     elif args.command == 'attempts':
         print(json.dumps(store.attempts(args.id), indent=2))
+    elif args.command == 'response':
+        result = store.attempt(args.id)
+        body = result.pop('response_body')
+        result['body_base64'] = base64.b64encode(body).decode('ascii') if body is not None else None
+        print(json.dumps(result, indent=2))
+    elif args.command == 'compare':
+        result = compare(store, args.baseline, args.candidate)
+        print(json.dumps(result, indent=2))
+        if not result['match']:
+            raise SystemExit(1)
     elif args.command == 'export':
         export_fixture(store, args.id, args.file)
         print(json.dumps({'file': args.file}))

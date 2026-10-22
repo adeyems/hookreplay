@@ -8,7 +8,8 @@ Remaining work estimates are rough engineering estimates, not time already worke
 - Cancellation and recovery of interrupted attempts: 3-5 hours.
 - JSON Schema contract checks with useful field-level diagnostics: 6-10 hours.
 - Deterministic duplicate, delay and reordering scenarios: 8-12 hours.
-- Response capture, bounded body diffs and baseline comparison: 6-10 hours.
+- Completed: bounded response capture and exact baseline comparison with completeness checks.
+- Structured JSON differences, configurable ignored fields and readable text diffs: 4-7 hours.
 - Completed: portable JSON fixture export/import, version 1 format, byte preservation and validation.
 - Named fixture collections, discovery and bulk import: 3-5 hours.
 - Local request/replay review UI and end-to-end tests: 10-16 hours.
