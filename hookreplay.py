@@ -1,15 +1,56 @@
 """Local synthetic webhook capture and replay. Python 3.10+, no dependencies."""
 import argparse
+import base64
 import http.client
 import json
 import sqlite3
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 MAX_BODY = 1024 * 1024
 SAFE_HEADERS = {'content-type', 'x-event-type'}
+MAX_FIXTURE = 2 * MAX_BODY
+
+
+def export_fixture(store, event_id, path):
+    event = store.get(event_id)
+    fixture = {'version': 1, 'method': 'POST', 'headers': event['headers'],
+               'body_base64': base64.b64encode(event['body']).decode('ascii')}
+    # Exclusive creation protects existing fixtures from accidental overwrite.
+    with open(path, 'x', encoding='utf-8') as output:
+        json.dump(fixture, output, indent=2, sort_keys=True)
+        output.write('\n')
+
+
+def import_fixture(store, path):
+    with open(path, 'rb') as source:
+        raw = source.read(MAX_FIXTURE + 1)
+    if len(raw) > MAX_FIXTURE:
+        raise ValueError('Fixture exceeds 2 MiB')
+    fixture = json.loads(raw)
+    if not isinstance(fixture, dict) or set(fixture) != {'version', 'method', 'headers', 'body_base64'}:
+        raise ValueError('Fixture must contain version, method, headers and body_base64 only')
+    if type(fixture['version']) is not int or fixture['version'] != 1:
+        raise ValueError('Unsupported fixture version; expected 1')
+    if fixture['method'] != 'POST':
+        raise ValueError('Only POST fixtures are supported')
+    headers = fixture['headers']
+    if not isinstance(headers, dict):
+        raise ValueError('Fixture headers must be an object')
+    for name, value in headers.items():
+        if name not in SAFE_HEADERS or not isinstance(value, str):
+            raise ValueError('Only lowercase content-type and x-event-type string headers are supported')
+        if any(ord(char) < 32 or ord(char) == 127 or ord(char) > 255 for char in value):
+            raise ValueError('Header values must be HTTP-compatible text without control characters')
+    if not isinstance(fixture['body_base64'], str):
+        raise ValueError('body_base64 must be a string')
+    body = base64.b64decode(fixture['body_base64'], validate=True)
+    if len(body) > MAX_BODY:
+        raise ValueError('Decoded fixture body exceeds 1 MiB')
+    return store.capture(headers, body)
 
 
 class Store:
@@ -22,8 +63,14 @@ class Store:
             if 'error' not in columns:
                 conn.execute('ALTER TABLE attempts ADD COLUMN error TEXT')
 
+    @contextmanager
     def connect(self):
-        return sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path)
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def capture(self, headers, body):
         safe = {k.lower(): v for k, v in headers.items() if k.lower() in SAFE_HEADERS}
@@ -128,6 +175,11 @@ def main():
     inspect.add_argument('id', type=int)
     attempts = commands.add_parser('attempts', help='Show the latest 100 replay attempts for an event')
     attempts.add_argument('id', type=int)
+    export = commands.add_parser('export', help='Export an event to a new portable JSON fixture')
+    export.add_argument('id', type=int)
+    export.add_argument('file')
+    load = commands.add_parser('import', help='Validate a fixture and create a new event')
+    load.add_argument('file')
     send = commands.add_parser('replay')
     send.add_argument('id', type=int)
     send.add_argument('target')
@@ -150,6 +202,11 @@ def main():
         print(json.dumps(event, indent=2))
     elif args.command == 'attempts':
         print(json.dumps(store.attempts(args.id), indent=2))
+    elif args.command == 'export':
+        export_fixture(store, args.id, args.file)
+        print(json.dumps({'file': args.file}))
+    elif args.command == 'import':
+        print(json.dumps({'id': import_fixture(store, args.file)}))
     else:
         status = replay(store, args.id, args.target)
         print(json.dumps({'http_status': status}))

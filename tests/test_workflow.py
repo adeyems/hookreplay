@@ -6,6 +6,7 @@ import sqlite3
 import socket
 import subprocess
 import sys
+from contextlib import closing
 import unittest
 from pathlib import Path
 
@@ -95,7 +96,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_upgrade_preserves_legacy_attempts(self):
         legacy = str(Path(self.temp.name) / 'legacy.sqlite')
-        with sqlite3.connect(legacy) as conn:
+        with closing(sqlite3.connect(legacy)) as conn, conn:
             conn.execute('CREATE TABLE attempts (id INTEGER PRIMARY KEY, event_id INTEGER, created TEXT, target TEXT, status INTEGER)')
             conn.execute("INSERT INTO attempts VALUES (1,1,'2026-10-22','http://127.0.0.1/',201)")
         migrated = Store(legacy)

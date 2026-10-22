@@ -9,7 +9,8 @@ Remaining work estimates are rough engineering estimates, not time already worke
 - JSON Schema contract checks with useful field-level diagnostics: 6-10 hours.
 - Deterministic duplicate, delay and reordering scenarios: 8-12 hours.
 - Response capture, bounded body diffs and baseline comparison: 6-10 hours.
-- Named synthetic fixtures, portable export/import and schema versioning: 5-8 hours.
+- Completed: portable JSON fixture export/import, version 1 format, byte preservation and validation.
+- Named fixture collections, discovery and bulk import: 3-5 hours.
 - Local request/replay review UI and end-to-end tests: 10-16 hours.
 - Documentation, concurrent capture testing and packaging: 5-8 hours.
 

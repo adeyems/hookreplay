@@ -26,7 +26,19 @@ POST capture only, 1 MiB maximum body, HTTP replay to literal 127.0.0.1 only, fi
 
 `attempts ID` shows the latest 100 attempts, newest first, with target, UTC time, HTTP status or network error. Network/protocol failures have a null status and a recorded error. HTTP errors retain their status. Replay exits with code 1 for network errors and non-2xx responses. Existing databases upgrade automatically while preserving records. Response bodies, interrupted-process recovery and cancellation are not yet supported; an HTTP status means response headers arrived, not that an application-side operation succeeded.
 
-## Tests
+## Portable fixtures
+
+```sh
+python3 hookreplay.py export 1 build-finished.json
+python3 hookreplay.py --db another.sqlite import build-finished.json
+python3 hookreplay.py --db another.sqlite inspect 1
+```
+
+Export creates a new file and refuses to overwrite an existing one. Import validates the entire fixture before inserting a new event; repeat imports intentionally create separate events. The returned JSON contains the new event ID. No network request is made during import.
+
+Version 1 fixtures contain exactly `version: 1`, `method: "POST"`, `headers`, and `body_base64`. Base64 preserves binary bytes; it is not encryption or redaction. Only lowercase `content-type` and `x-event-type` headers with HTTP-compatible values are accepted. Bodies are limited to 1 MiB and files to 2 MiB. Unknown versions, fields, invalid base64 and unsupported headers are rejected. Capture timestamps, database IDs, destinations and attempt history are deliberately not transported. Keep fixture filenames descriptive and use synthetic content.
+
+## Verification
 
 ```sh
 python3 -m unittest discover -s tests -v
