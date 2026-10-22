@@ -166,11 +166,11 @@ def parse_json_body(body):
         raise ValueError(f'Response is not supported valid JSON: {error}') from error
 
 
-def compare(store, baseline_id, candidate_id, json_mode=False, ignored=()):
+def validate_rules(json_mode, ignored):
     if ignored and not json_mode:
         raise ValueError('--ignore requires --json')
     for pointer in ignored:
-        if not pointer.startswith('/'):
+        if not isinstance(pointer, str) or not pointer.startswith('/'):
             raise ValueError('Ignored fields must use non-root JSON Pointers such as /metadata/time')
         for part in pointer.split('/')[1:]:
             index = 0
@@ -180,13 +180,57 @@ def compare(store, baseline_id, candidate_id, json_mode=False, ignored=()):
                         raise ValueError('Invalid JSON Pointer escape; use ~0 or ~1')
                     index += 1
                 index += 1
+
+
+def save_profile(path, json_mode=False, ignored=()):
+    validate_rules(json_mode, ignored)
+    profile = {'version': 1, 'mode': 'json' if json_mode else 'bytes',
+               'ignored': sorted(set(ignored))}
+    encoded = json.dumps(profile, indent=2, sort_keys=True) + '\n'
+    if len(encoded.encode('utf-8')) > 16384:
+        raise ValueError('Profile exceeds 16 KiB')
+    with open(path, 'x', encoding='utf-8') as output:
+        output.write(encoded)
+    return profile
+
+
+def load_profile(path):
+    with open(path, 'rb') as source:
+        raw = source.read(16385)
+    if len(raw) > 16384:
+        raise ValueError('Profile exceeds 16 KiB')
+
+    def unique(pairs):
+        obj = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError('Duplicate profile key')
+            obj[key] = value
+        return obj
+    try:
+        profile = json.loads(raw, object_pairs_hook=unique)
+    except RecursionError as error:
+        raise ValueError('Profile nesting is too deep') from error
+    if not isinstance(profile, dict) or set(profile) != {'version', 'mode', 'ignored'}:
+        raise ValueError('Profile requires exactly version, mode and ignored')
+    if type(profile['version']) is not int or profile['version'] != 1:
+        raise ValueError('Unsupported profile version')
+    if profile['mode'] not in ('json', 'bytes') or not isinstance(profile['ignored'], list):
+        raise ValueError('Profile requires mode json/bytes and an ignored array')
+    validate_rules(profile['mode'] == 'json', profile['ignored'])
+    profile['ignored'] = sorted(set(profile['ignored']))
+    return profile
+
+
+def compare(store, baseline_id, candidate_id, json_mode=False, ignored=()):
+    validate_rules(json_mode, ignored)
     baseline, candidate = store.attempt(baseline_id), store.attempt(candidate_id)
     if baseline['event_id'] != candidate['event_id']:
         raise ValueError('Comparison requires attempts for the same captured event')
     if any(row['response_complete'] != 1 or row['error'] for row in (baseline, candidate)):
         raise ValueError('Both attempts must have complete captured responses without network errors')
     changed = [name for name in ('status', 'response_headers', 'response_body') if baseline[name] != candidate[name]]
-    details = {}
+    details = {'mode': 'bytes', 'ignored': []}
     if json_mode:
         if any(row['response_headers'].get('content-encoding', 'identity').lower() != 'identity'
                for row in (baseline, candidate)):
@@ -296,6 +340,11 @@ def main():
     diff.add_argument('candidate', type=int)
     diff.add_argument('--json', action='store_true', dest='json_mode', help='Compare parsed JSON bodies')
     diff.add_argument('--ignore', action='append', default=[], metavar='POINTER', help='Ignore an exact JSON Pointer subtree; repeatable, requires --json')
+    diff.add_argument('--profile', help='Load a saved profile; cannot combine with --json or --ignore')
+    profile = commands.add_parser('profile', help='Save reusable comparison rules to a new JSON file')
+    profile.add_argument('file')
+    profile.add_argument('--json', action='store_true', dest='json_mode')
+    profile.add_argument('--ignore', action='append', default=[], metavar='POINTER')
     export = commands.add_parser('export', help='Export an event to a new portable JSON fixture')
     export.add_argument('id', type=int)
     export.add_argument('file')
@@ -305,6 +354,17 @@ def main():
     send.add_argument('id', type=int)
     send.add_argument('target')
     args = parser.parse_args()
+    if args.command == 'profile':
+        result = save_profile(args.file, args.json_mode, args.ignore)
+        print(json.dumps({'file': args.file, **result}))
+        return
+    profile_rules = None
+    if args.command == 'compare' and args.profile:
+        if args.json_mode or args.ignore:
+            raise ValueError('--profile cannot be combined with --json or --ignore')
+        profile_rules = load_profile(args.profile)
+        args.json_mode = profile_rules['mode'] == 'json'
+        args.ignore = profile_rules['ignored']
     store = Store(args.db)
     if args.command == 'serve':
         instance = server(store, args.port)
@@ -330,6 +390,8 @@ def main():
         print(json.dumps(result, indent=2))
     elif args.command == 'compare':
         result = compare(store, args.baseline, args.candidate, args.json_mode, args.ignore)
+        if profile_rules is not None:
+            result['profile'] = {'file': args.profile, **profile_rules}
         print(json.dumps(result, indent=2))
         if not result['match']:
             raise SystemExit(1)

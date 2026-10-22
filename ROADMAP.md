@@ -10,7 +10,8 @@ Remaining work estimates are rough engineering estimates, not time already worke
 - Deterministic duplicate, delay and reordering scenarios: 8-12 hours.
 - Completed: bounded response capture and exact baseline comparison with completeness checks.
 - Completed: structured JSON differences and exact ignored-field pointers.
-- Readable text diffs and saved comparison profiles: 3-5 hours.
+- Completed: versioned comparison profiles, validation and CLI reuse.
+- Readable text diffs and named baseline selection: 3-5 hours.
 - Completed: portable JSON fixture export/import, version 1 format, byte preservation and validation.
 - Named fixture collections, discovery and bulk import: 3-5 hours.
 - Local request/replay review UI and end-to-end tests: 10-16 hours.

@@ -52,7 +52,18 @@ JSON mode compares parsed bodies: whitespace and object-key order do not matter,
 
 Malformed JSON, duplicate keys, NaN/Infinity, excessive nesting and compressed response bodies are rejected. Capture completeness requirements still apply. Default comparison remains byte-exact. JSON mode does not persistently modify the captured response or baseline.
 
-## Portable fixture commands
+## Saved comparison profiles
+
+```sh
+python3 hookreplay.py profile comparison.json --json --ignore /metadata/timestamp --ignore /requestId
+python3 hookreplay.py compare 1 2 --profile comparison.json
+```
+
+Profiles are portable JSON files suitable for version control. Version 1 has exactly three fields: `version` (integer 1), `mode` (`json` or `bytes`), and `ignored` (an array of exact JSON Pointers). Creating a profile without flags saves byte-exact mode. Ignore paths require JSON mode, and duplicate paths are normalized. Creation refuses to overwrite an existing file and does not create a database.
+
+`--profile` cannot be combined with `--json` or `--ignore`; edit the profile or choose inline flags. Reports include the profile path, version and effective settings. Baseline IDs stay on the command line, allowing the same rules to be used with different captured events. Invalid versions, duplicate or unknown keys, malformed rules and files over 16 KiB are rejected before comparison. Profiles do not suppress status/header changes or bypass completeness checks.
+
+## Fixture export and import
 
 ```sh
 python3 hookreplay.py export 1 build-finished.json
