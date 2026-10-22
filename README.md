@@ -52,7 +52,20 @@ JSON mode compares parsed bodies: whitespace and object-key order do not matter,
 
 Malformed JSON, duplicate keys, NaN/Infinity, excessive nesting and compressed response bodies are rejected. Capture completeness requirements still apply. Default comparison remains byte-exact. JSON mode does not persistently modify the captured response or baseline.
 
-## Saved comparison profiles
+## Named baselines and readable text diffs
+
+```sh
+python3 hookreplay.py baseline stable 1
+python3 hookreplay.py baselines
+python3 hookreplay.py compare stable 2 --text-diff
+python3 hookreplay.py compare stable 2 --profile comparison.json
+```
+
+Names persist in the selected SQLite database and identify one complete response attempt. Names start with a letter and contain up to 64 letters, digits, hyphens or underscores. Existing names cannot be replaced; use a new name for a revised baseline. Comparing still requires the same event and complete responses. Numeric attempt IDs remain supported.
+
+`--text-diff` uses exact byte comparison and prints the JSON result followed by a readable unified diff. It requires UTF-8, uncompressed responses and cannot be combined with JSON mode (including JSON profiles). Control characters are escaped. Missing final newlines are shown explicitly. Display is capped at 200 diff lines/16 KiB; bodies exceeding 2000 lines omit the diff. These display limits do not affect the full byte comparison or exit code. Omit `--text-diff` for machine-readable JSON-only output.
+
+## Reusable comparison rules
 
 ```sh
 python3 hookreplay.py profile comparison.json --json --ignore /metadata/timestamp --ignore /requestId

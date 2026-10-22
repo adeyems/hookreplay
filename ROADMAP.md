@@ -11,7 +11,7 @@ Remaining work estimates are rough engineering estimates, not time already worke
 - Completed: bounded response capture and exact baseline comparison with completeness checks.
 - Completed: structured JSON differences and exact ignored-field pointers.
 - Completed: versioned comparison profiles, validation and CLI reuse.
-- Readable text diffs and named baseline selection: 3-5 hours.
+- Completed: bounded readable text diffs and persistent named baseline selection.
 - Completed: portable JSON fixture export/import, version 1 format, byte preservation and validation.
 - Named fixture collections, discovery and bulk import: 3-5 hours.
 - Local request/replay review UI and end-to-end tests: 10-16 hours.

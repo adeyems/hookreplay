@@ -1,6 +1,8 @@
 """Local synthetic webhook capture and replay. Python 3.10+, no dependencies."""
 import argparse
 import base64
+import difflib
+import re
 import http.client
 import json
 import sqlite3
@@ -61,6 +63,7 @@ class Store:
         with self.connect() as conn:
             conn.execute('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, created TEXT, headers TEXT, body BLOB)')
             conn.execute('CREATE TABLE IF NOT EXISTS attempts (id INTEGER PRIMARY KEY, event_id INTEGER, created TEXT, target TEXT, status INTEGER)')
+            conn.execute('CREATE TABLE IF NOT EXISTS baselines (name TEXT PRIMARY KEY, attempt_id INTEGER NOT NULL)')
             columns = {row[1] for row in conn.execute('PRAGMA table_info(attempts)')}
             if 'error' not in columns:
                 conn.execute('ALTER TABLE attempts ADD COLUMN error TEXT')
@@ -120,6 +123,61 @@ class Store:
             rows = conn.execute('SELECT id,event_id,created,target,status,error,response_complete,length(response_body) AS response_bytes FROM attempts WHERE event_id=? ORDER BY id DESC LIMIT 100',
                                 (event_id,)).fetchall()
         return [dict(row) for row in rows]
+
+    def name_baseline(self, name, attempt_id):
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', name):
+            raise ValueError('Baseline name must start with a letter and contain up to 64 letters, digits, underscores or hyphens')
+        attempt = self.attempt(attempt_id)
+        if attempt['response_complete'] != 1 or attempt['error']:
+            raise ValueError('Baseline requires a complete response without network errors')
+        try:
+            with self.connect() as conn:
+                conn.execute('INSERT INTO baselines VALUES (?,?)', (name, attempt_id))
+        except sqlite3.IntegrityError as error:
+            raise ValueError('Baseline name already exists; choose a new name') from error
+
+    def resolve_baseline(self, reference):
+        if str(reference).isdecimal():
+            return int(reference)
+        with self.connect() as conn:
+            row = conn.execute('SELECT attempt_id FROM baselines WHERE name=?', (reference,)).fetchone()
+        if row is None:
+            raise ValueError('Named baseline not found')
+        return row[0]
+
+    def baselines(self):
+        with self.connect() as conn:
+            return [{'name': row[0], 'attempt_id': row[1]} for row in
+                    conn.execute('SELECT name,attempt_id FROM baselines ORDER BY name')]
+
+
+def readable_diff(store, baseline, candidate):
+    texts = []
+    for attempt_id in (baseline, candidate):
+        row = store.attempt(attempt_id)
+        if row['response_headers'].get('content-encoding', 'identity').lower() != 'identity':
+            raise ValueError('Text diffs require uncompressed responses')
+        try:
+            text = row['response_body'].decode('utf-8')
+        except UnicodeDecodeError as error:
+            raise ValueError('Text diffs require UTF-8 bodies') from error
+        # Escape terminal control characters, preserve line boundaries, show CR explicitly.
+        text = ''.join(char if char == '\n' or char.isprintable() else repr(char)[1:-1] for char in text)
+        lines = text.splitlines(keepends=True)
+        if lines and not lines[-1].endswith('\n'):
+            lines[-1] += '\n\\ No newline at end of file\n'
+        if len(lines) > 2000:
+            return 'Text diff omitted: response exceeds 2000 lines. Byte comparison remains exact.\n'
+        texts.append(lines)
+    output = []
+    size = 0
+    for line in difflib.unified_diff(*texts, fromfile=f'baseline-{baseline}', tofile=f'candidate-{candidate}'):
+        size += len(line)
+        if len(output) >= 200 or size > 16384:
+            output.append('[Diff truncated; comparison used complete bodies.]\n')
+            break
+        output.append(line)
+    return ''.join(output)
 
 
 def json_differences(left, right, ignored):
@@ -336,11 +394,16 @@ def main():
     detail = commands.add_parser('response', help='Inspect a captured response by attempt ID')
     detail.add_argument('id', type=int)
     diff = commands.add_parser('compare', help='Compare two complete responses for the same event')
-    diff.add_argument('baseline', type=int)
+    diff.add_argument('baseline', help='Attempt ID or saved baseline name')
     diff.add_argument('candidate', type=int)
     diff.add_argument('--json', action='store_true', dest='json_mode', help='Compare parsed JSON bodies')
     diff.add_argument('--ignore', action='append', default=[], metavar='POINTER', help='Ignore an exact JSON Pointer subtree; repeatable, requires --json')
     diff.add_argument('--profile', help='Load a saved profile; cannot combine with --json or --ignore')
+    diff.add_argument('--text-diff', action='store_true', help='Print a bounded unified text diff; byte mode only')
+    baseline = commands.add_parser('baseline', help='Save a name for a complete response attempt')
+    baseline.add_argument('name')
+    baseline.add_argument('attempt', type=int)
+    commands.add_parser('baselines', help='List saved baseline names')
     profile = commands.add_parser('profile', help='Save reusable comparison rules to a new JSON file')
     profile.add_argument('file')
     profile.add_argument('--json', action='store_true', dest='json_mode')
@@ -389,12 +452,26 @@ def main():
         result['body_base64'] = base64.b64encode(body).decode('ascii') if body is not None else None
         print(json.dumps(result, indent=2))
     elif args.command == 'compare':
-        result = compare(store, args.baseline, args.candidate, args.json_mode, args.ignore)
+        baseline_id = store.resolve_baseline(args.baseline)
+        if args.text_diff and args.json_mode:
+            raise ValueError('--text-diff requires byte comparison, not JSON mode')
+        result = compare(store, baseline_id, args.candidate, args.json_mode, args.ignore)
+        result['baseline_reference'] = args.baseline
         if profile_rules is not None:
             result['profile'] = {'file': args.profile, **profile_rules}
-        print(json.dumps(result, indent=2))
+        if args.text_diff:
+            difference = readable_diff(store, baseline_id, args.candidate)
+            print(json.dumps(result, indent=2))
+            print(difference, end='')
+        else:
+            print(json.dumps(result, indent=2))
         if not result['match']:
             raise SystemExit(1)
+    elif args.command == 'baseline':
+        store.name_baseline(args.name, args.attempt)
+        print(json.dumps({'name': args.name, 'attempt_id': args.attempt}))
+    elif args.command == 'baselines':
+        print(json.dumps(store.baselines(), indent=2))
     elif args.command == 'export':
         export_fixture(store, args.id, args.file)
         print(json.dumps({'file': args.file}))
