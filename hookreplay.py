@@ -29,7 +29,7 @@ def export_fixture(store, event_id, path):
         output.write('\n')
 
 
-def import_fixture(store, path):
+def read_fixture(path):
     with open(path, 'rb') as source:
         raw = source.read(MAX_FIXTURE + 1)
     if len(raw) > MAX_FIXTURE:
@@ -54,7 +54,25 @@ def import_fixture(store, path):
     body = base64.b64decode(fixture['body_base64'], validate=True)
     if len(body) > MAX_BODY:
         raise ValueError('Decoded fixture body exceeds 1 MiB')
-    return store.capture(headers, body)
+    return headers, body
+
+
+def import_fixture(store, path):
+    return store.capture(*read_fixture(path))
+
+
+def import_fixtures(store, paths):
+    if not 1 <= len(paths) <= 100:
+        raise ValueError('Bulk import requires 1–100 fixture files')
+    # Validate every bounded fixture before making any persistent changes.
+    fixtures = [read_fixture(path) for path in paths]
+    with store.connect() as conn:
+        ids = []
+        for headers, body in fixtures:
+            cursor = conn.execute('INSERT INTO events(created,headers,body) VALUES (?,?,?)',
+                                  (datetime.now(timezone.utc).isoformat(), json.dumps(headers), body))
+            ids.append(cursor.lastrowid)
+    return ids
 
 
 class Store:
@@ -452,6 +470,8 @@ def main():
     collection.add_argument('name')
     collection.add_argument('ids', nargs='+', type=int)
     commands.add_parser('collections', help='Discover saved fixture collections')
+    bulk = commands.add_parser('import-many', help='Atomically import 1–100 fixtures in argument order')
+    bulk.add_argument('files', nargs='+')
     args = parser.parse_args()
     if args.command == 'profile':
         result = save_profile(args.file, args.json_mode, args.ignore)
@@ -516,6 +536,8 @@ def main():
     elif args.command == 'export':
         export_fixture(store, args.id, args.file)
         print(json.dumps({'file': args.file}))
+    elif args.command == 'import-many':
+        print(json.dumps({'ids': import_fixtures(store, args.files)}))
     elif args.command == 'import':
         print(json.dumps({'id': import_fixture(store, args.file)}))
     else:

@@ -103,3 +103,7 @@ Create an immutable, ordered event collection with `python3 hookreplay.py --db d
 ## Installable command
 
 From this checkout, run `python3 -m pip install .` in a virtual environment. Then use `hookreplay --help` from any directory. Python 3.10+ is required; the package has no runtime Python dependencies. This installs locally and does not publish to PyPI. Run `python3 tools/check_install.py` to build a wheel and verify installation in a fresh virtual environment. Building requires setuptools from the configured package index.
+
+## Atomic bulk fixture import
+
+`hookreplay --db demo.sqlite import-many first.json second.json` validates 1–100 bounded fixture files, then imports them in argument order in one database transaction. Any invalid file or database insertion failure leaves no imported rows. The result contains ordered new IDs. Existing single-file import is unchanged. Duplicate input files intentionally create separate events. Validation can retain up to 100 MiB of decoded bodies in memory; use smaller batches when needed.
