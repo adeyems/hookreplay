@@ -20,3 +20,5 @@ Remaining work estimates are rough engineering estimates, not time already worke
 Each issue must have observable acceptance criteria and tests for failure paths. Scope stays ordinary HTTP integration development using synthetic data. Public ingress, arbitrary remote replay, real customer payloads and production deployment are outside this prototype.
 
 Completed follow-up: named fixture collections. See README for scope and remaining limitations.
+
+Completed packaging slice: installable wheel and console entry point with isolated installation checks in CI. Public package publication and broader release automation remain future work.

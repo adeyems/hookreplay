@@ -99,3 +99,7 @@ See [ROADMAP.md](ROADMAP.md) for planned work. MIT licensed. This prototype has 
 ## Named fixture collections
 
 Create an immutable, ordered event collection with `python3 hookreplay.py --db demo.sqlite collection checkout 2 1`. Discover collections with `collections`. Names use a letter followed by up to 63 letters, digits, underscores or hyphens. Collections reference 1–100 distinct existing event IDs in the same database; creation validates all members transactionally and never overwrites a name. No requests are sent. Portable collection export and bulk import remain future work.
+
+## Installable command
+
+From this checkout, run `python3 -m pip install .` in a virtual environment. Then use `hookreplay --help` from any directory. Python 3.10+ is required; the package has no runtime Python dependencies. This installs locally and does not publish to PyPI. Run `python3 tools/check_install.py` to build a wheel and verify installation in a fresh virtual environment. Building requires setuptools from the configured package index.

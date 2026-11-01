@@ -525,9 +525,13 @@ def main():
             raise SystemExit(1)
 
 
-if __name__ == '__main__':
+def entrypoint():
     try:
         main()
     except (ValueError, OSError, http.client.HTTPException, sqlite3.Error) as error:
         print(json.dumps({'error': str(error)}), file=sys.stderr)
         raise SystemExit(1)
+
+
+if __name__ == '__main__':
+    entrypoint()
