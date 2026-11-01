@@ -359,6 +359,11 @@ def compare(store, baseline_id, candidate_id, json_mode=False, ignored=()):
             'candidate_bytes': len(candidate['response_body'])}
 
 
+class CaptureServer(ThreadingHTTPServer):
+    # Accommodate small simultaneous local batches before handler dispatch.
+    request_queue_size = 64
+
+
 def server(store, port=8081):
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -387,14 +392,19 @@ def server(store, port=8081):
             if len(body) != length:
                 self.send_error(400, 'Incomplete body')
                 return
-            event_id = store.capture(dict(self.headers), body)
+            try:
+                event_id = store.capture(dict(self.headers), body)
+            except sqlite3.Error:
+                # Never acknowledge a capture that did not commit successfully.
+                self.send_error(503, 'Capture storage unavailable')
+                return
             payload = json.dumps({'id': event_id}).encode()
             self.send_response(201)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Content-Length', str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
-    return ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    return CaptureServer(('127.0.0.1', port), Handler)
 
 
 def replay(store, event_id, target):

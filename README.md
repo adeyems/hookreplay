@@ -107,3 +107,7 @@ From this checkout, run `python3 -m pip install .` in a virtual environment. The
 ## Atomic bulk fixture import
 
 `hookreplay --db demo.sqlite import-many first.json second.json` validates 1–100 bounded fixture files, then imports them in argument order in one database transaction. Any invalid file or database insertion failure leaves no imported rows. The result contains ordered new IDs. Existing single-file import is unchanged. Duplicate input files intentionally create separate events. Validation can retain up to 100 MiB of decoded bodies in memory; use smaller batches when needed.
+
+## Concurrent capture and storage failures
+
+The listener backlog is explicitly 64 to accommodate small simultaneous local batches. The threaded capture endpoint is tested with 24 distinct binary payloads across eight concurrent clients, including reopening the database and checking unique IDs and byte preservation. SQLite storage errors return HTTP 503 with a generic message instead of closing the connection without a response. No successful capture is acknowledged before its transaction completes. This is correctness coverage, not a throughput guarantee; SQLite contention may still fail after its busy timeout. Clients must account for uncertain delivery if a connection drops after commit.

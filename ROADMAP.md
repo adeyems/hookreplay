@@ -24,3 +24,5 @@ Completed follow-up: named fixture collections. See README for scope and remaini
 Completed packaging slice: installable wheel and console entry point with isolated installation checks in CI. Public package publication and broader release automation remain future work.
 
 Completed scoped milestone: atomic bulk fixture import. See README for exact semantics and remaining limitations.
+
+Completed scoped follow-up: concurrent capture and storage failures. See README for acceptance scope and remaining limitations.

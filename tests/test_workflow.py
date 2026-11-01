@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 import http.client
 import json
 import tempfile
@@ -29,13 +31,35 @@ class WorkflowTest(unittest.TestCase):
         self.temp.cleanup()
 
     def post(self, body, path='/capture', headers=None):
-        connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
+        connection = http.client.HTTPConnection('127.0.0.1', self.http.server_port, timeout=10)
         try:
             connection.request('POST', path, body, headers or {})
             response = connection.getresponse()
             return response.status, response.read()
         finally:
             connection.close()
+
+    def test_concurrent_capture_keeps_each_payload_and_unique_id(self):
+        bodies = [f'synthetic-{i}'.encode() + b'\x00\xff' for i in range(24)]
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            responses = list(pool.map(self.post, bodies))
+        ids = []
+        reopened = Store(self.path)
+        for body, (status, response) in zip(bodies, responses):
+            self.assertEqual(status, 201)
+            event_id = json.loads(response)['id']
+            ids.append(event_id)
+            self.assertEqual(reopened.get(event_id)['body'], body)
+        self.assertEqual(len(set(ids)), 24)
+        self.assertEqual(len(reopened.list()), 24)
+
+    def test_storage_failure_is_explicit_and_server_recovers(self):
+        with patch.object(self.store, 'capture', side_effect=sqlite3.OperationalError('private database detail')):
+            status, body = self.post(b'synthetic')
+        self.assertEqual(status, 503)
+        self.assertNotIn(b'private database detail', body)
+        self.assertEqual(self.store.list(), [])
+        self.assertEqual(self.post(b'next')[0], 201)
 
     def test_capture_restart_inspect_replay_exact_bytes(self):
         body = b'{"event":"build.finished"}\n\x00\xff'
