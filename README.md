@@ -95,3 +95,7 @@ python3 -m unittest discover -s tests -v
 ```
 
 See [ROADMAP.md](ROADMAP.md) for planned work. MIT licensed. This prototype has no claim of production readiness or programme acceptance.
+
+## Named fixture collections
+
+Create an immutable, ordered event collection with `python3 hookreplay.py --db demo.sqlite collection checkout 2 1`. Discover collections with `collections`. Names use a letter followed by up to 63 letters, digits, underscores or hyphens. Collections reference 1–100 distinct existing event IDs in the same database; creation validates all members transactionally and never overwrites a name. No requests are sent. Portable collection export and bulk import remain future work.

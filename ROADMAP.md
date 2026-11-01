@@ -18,3 +18,5 @@ Remaining work estimates are rough engineering estimates, not time already worke
 - Documentation, concurrent capture testing and packaging: 5-8 hours.
 
 Each issue must have observable acceptance criteria and tests for failure paths. Scope stays ordinary HTTP integration development using synthetic data. Public ingress, arbitrary remote replay, real customer payloads and production deployment are outside this prototype.
+
+Completed follow-up: named fixture collections. See README for scope and remaining limitations.

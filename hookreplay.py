@@ -64,6 +64,7 @@ class Store:
             conn.execute('CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, created TEXT, headers TEXT, body BLOB)')
             conn.execute('CREATE TABLE IF NOT EXISTS attempts (id INTEGER PRIMARY KEY, event_id INTEGER, created TEXT, target TEXT, status INTEGER)')
             conn.execute('CREATE TABLE IF NOT EXISTS baselines (name TEXT PRIMARY KEY, attempt_id INTEGER NOT NULL)')
+            conn.execute('CREATE TABLE IF NOT EXISTS collections (name TEXT PRIMARY KEY, event_ids TEXT NOT NULL)')
             columns = {row[1] for row in conn.execute('PRAGMA table_info(attempts)')}
             if 'error' not in columns:
                 conn.execute('ALTER TABLE attempts ADD COLUMN error TEXT')
@@ -123,6 +124,25 @@ class Store:
             rows = conn.execute('SELECT id,event_id,created,target,status,error,response_complete,length(response_body) AS response_bytes FROM attempts WHERE event_id=? ORDER BY id DESC LIMIT 100',
                                 (event_id,)).fetchall()
         return [dict(row) for row in rows]
+
+    def create_collection(self, name, event_ids):
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', name):
+            raise ValueError('Invalid collection name')
+        if not event_ids or len(event_ids) > 100 or any(type(i) is not int or i <= 0 for i in event_ids) or len(set(event_ids)) != len(event_ids):
+            raise ValueError('Collection requires 1–100 distinct positive event IDs')
+        with self.connect() as conn:
+            for event_id in event_ids:
+                if conn.execute('SELECT 1 FROM events WHERE id=?', (event_id,)).fetchone() is None:
+                    raise ValueError('Collection event not found')
+            try:
+                conn.execute('INSERT INTO collections VALUES (?,?)', (name, json.dumps(event_ids)))
+            except sqlite3.IntegrityError as error:
+                raise ValueError('Collection already exists') from error
+
+    def collections(self):
+        with self.connect() as conn:
+            return [{'name': name, 'event_ids': json.loads(ids)} for name, ids in
+                    conn.execute('SELECT name,event_ids FROM collections ORDER BY name')]
 
     def name_baseline(self, name, attempt_id):
         if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]{0,63}', name):
@@ -428,6 +448,10 @@ def main():
     send = commands.add_parser('replay')
     send.add_argument('id', type=int)
     send.add_argument('target')
+    collection = commands.add_parser('collection', help='Create a named ordered collection of captured events')
+    collection.add_argument('name')
+    collection.add_argument('ids', nargs='+', type=int)
+    commands.add_parser('collections', help='Discover saved fixture collections')
     args = parser.parse_args()
     if args.command == 'profile':
         result = save_profile(args.file, args.json_mode, args.ignore)
@@ -484,6 +508,11 @@ def main():
         print(json.dumps({'name': args.name, 'attempt_id': args.attempt}))
     elif args.command == 'baselines':
         print(json.dumps(store.baselines(), indent=2))
+    elif args.command == 'collection':
+        store.create_collection(args.name, args.ids)
+        print(json.dumps({'name': args.name, 'event_ids': args.ids}))
+    elif args.command == 'collections':
+        print(json.dumps(store.collections(), indent=2))
     elif args.command == 'export':
         export_fixture(store, args.id, args.file)
         print(json.dumps({'file': args.file}))
