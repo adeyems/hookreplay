@@ -7,7 +7,7 @@ Remaining work estimates are rough engineering estimates, not time already worke
 - Completed: replay attempt inspection, network-error records and migration of existing databases.
 - Cancellation and recovery of interrupted attempts: 3-5 hours.
 - JSON Schema contract checks with useful field-level diagnostics: 6-10 hours.
-- Deterministic duplicate, delay and reordering scenarios: 8-12 hours.
+- Completed: explicit sequential duplicate/delay/reordering scenarios. Durable scenario recovery remains future work.
 - Completed: bounded response capture and exact baseline comparison with completeness checks.
 - Completed: structured JSON differences and exact ignored-field pointers.
 - Completed: versioned comparison profiles, validation and CLI reuse.
@@ -30,3 +30,5 @@ Completed scoped follow-up: concurrent capture and storage failures. See README 
 Completed scoped follow-up: local fixture discovery. See README for precise behavior and remaining work.
 
 Completed scoped follow-up: portable collection export. See README for limitations and remaining work.
+
+Completed scoped follow-up: deterministic replay scenarios. See README for remaining limitations.

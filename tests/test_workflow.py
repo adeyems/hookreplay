@@ -12,7 +12,7 @@ from contextlib import closing
 import unittest
 from pathlib import Path
 
-from hookreplay import Store, replay, server
+from hookreplay import Store, replay, replay_scenario, server
 
 
 class WorkflowTest(unittest.TestCase):
@@ -60,6 +60,16 @@ class WorkflowTest(unittest.TestCase):
         self.assertNotIn(b'private database detail', body)
         self.assertEqual(self.store.list(), [])
         self.assertEqual(self.post(b'next')[0], 201)
+
+    def test_scenario_sends_exact_order_and_records_real_attempts(self):
+        a=self.store.capture({},b'a')
+        b=self.store.capture({},b'b')
+        result=replay_scenario(self.store,f'http://127.0.0.1:{self.http.server_port}/capture',
+            {'version':1,'steps':[{'event_id':i,'delay_ms':0} for i in [b,a,b]]},sleep=lambda _:None)
+        self.assertTrue(result['http_success'])
+        self.assertEqual([self.store.get(i)['body'] for i in [3,4,5]],[b'b',b'a',b'b'])
+        with self.store.connect() as conn:
+            self.assertEqual(conn.execute('SELECT event_id,status FROM attempts ORDER BY id').fetchall(),[(b,201),(a,201),(b,201)])
 
     def test_capture_restart_inspect_replay_exact_bytes(self):
         body = b'{"event":"build.finished"}\n\x00\xff'

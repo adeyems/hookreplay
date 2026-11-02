@@ -8,6 +8,7 @@ import http.client
 import json
 import sqlite3
 import sys
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -455,10 +456,17 @@ def server(store, port=8081):
     return CaptureServer(('127.0.0.1', port), Handler)
 
 
-def replay(store, event_id, target):
+def replay_target(target):
     url = urlsplit(target)
     if url.scheme != 'http' or url.hostname != '127.0.0.1' or url.username or url.password or url.fragment:
         raise ValueError('Replay target must be an HTTP URL on 127.0.0.1 without credentials or fragments')
+    if url.port is not None and not 1 <= url.port <= 65535:
+        raise ValueError('Invalid replay port')
+    return url
+
+
+def replay(store, event_id, target):
+    url = replay_target(target)
     event = store.get(event_id)
     connection = http.client.HTTPConnection('127.0.0.1', url.port or 80, timeout=5)
     status, headers, body, complete = None, None, None, False
@@ -486,6 +494,56 @@ def replay(store, event_id, target):
         raise
     finally:
         connection.close()
+
+
+def replay_scenario(store, target, scenario, sleep=time.sleep):
+    replay_target(target)
+    if not isinstance(scenario, dict) or set(scenario) != {'version', 'steps'} or type(scenario['version']) is not int or scenario['version'] != 1:
+        raise ValueError('Scenario requires version 1 and steps')
+    steps = scenario['steps']
+    if not isinstance(steps, list) or not 1 <= len(steps) <= 20:
+        raise ValueError('Scenario requires 1–20 ordered steps')
+    for step in steps:
+        if not isinstance(step, dict) or set(step) != {'event_id', 'delay_ms'}:
+            raise ValueError('Each step requires event_id and delay_ms')
+        if type(step['event_id']) is not int or step['event_id'] <= 0 or type(step['delay_ms']) is not int or not 0 <= step['delay_ms'] <= 5000:
+            raise ValueError('Positive event ID and delay 0–5000 ms required')
+        store.get(step['event_id'])
+    if sum(step['delay_ms'] for step in steps) > 10000:
+        raise ValueError('Scenario delay budget exceeds 10000 ms')
+    results = []
+    stopped = False
+    try:
+        for index, step in enumerate(steps):
+            sleep(step['delay_ms'] / 1000)
+            try:
+                status = replay(store, step['event_id'], target)
+                result = {'step': index+1, 'event_id': step['event_id'], 'http_status': status, 'http_success': 200 <= status < 300}
+            except (OSError, http.client.HTTPException):
+                result = {'step': index+1, 'event_id': step['event_id'], 'http_status': None, 'http_success': False, 'network_error': True}
+            results.append(result)
+    except KeyboardInterrupt:
+        stopped = True
+    return {'version': 1, 'results': results, 'stopped': stopped, 'unreported_steps': len(steps)-len(results),
+            'http_success': not stopped and all(result['http_success'] for result in results)}
+
+
+def read_scenario(path):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('Duplicate scenario key')
+            result[key] = value
+        return result
+    with open(path, 'rb') as source:
+        raw = source.read(65537)
+    if len(raw) > 65536:
+        raise ValueError('Scenario exceeds 64 KiB')
+    try:
+        return json.loads(raw, object_pairs_hook=unique)
+    except RecursionError:
+        raise ValueError("Scenario nesting is excessive") from None
 
 
 def main():
@@ -535,6 +593,9 @@ def main():
     bundle = commands.add_parser('export-collection', help='Export an ordered collection to a new portable bundle')
     bundle.add_argument('name')
     bundle.add_argument('file')
+    scenario = commands.add_parser('replay-scenario', help='Run an explicit bounded replay order with delays and duplicates')
+    scenario.add_argument('file')
+    scenario.add_argument('target')
     args = parser.parse_args()
     if args.command == 'discover':
         result = discover_fixtures(args.directory)
@@ -602,6 +663,11 @@ def main():
         print(json.dumps({'name': args.name, 'event_ids': args.ids}))
     elif args.command == 'collections':
         print(json.dumps(store.collections(), indent=2))
+    elif args.command == 'replay-scenario':
+        result = replay_scenario(store, args.target, read_scenario(args.file))
+        print(json.dumps(result, indent=2))
+        if not result['http_success']:
+            raise SystemExit(1)
     elif args.command == 'export-collection':
         print(json.dumps({'file': args.file, 'fixtures': export_collection(store, args.name, args.file)}))
     elif args.command == 'export':
