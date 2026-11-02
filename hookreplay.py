@@ -20,6 +20,31 @@ MAX_FIXTURE = 2 * MAX_BODY
 MAX_RESPONSE = 64 * 1024
 
 
+def export_collection(store, name, path):
+    with store.connect() as conn:
+        row = conn.execute('SELECT event_ids FROM collections WHERE name=?', (name,)).fetchone()
+        if row is None:
+            raise ValueError('Collection not found')
+        fixtures = []
+        total = 0
+        for event_id in json.loads(row[0]):
+            event = conn.execute('SELECT headers,body FROM events WHERE id=?', (event_id,)).fetchone()
+            if event is None:
+                raise ValueError('Collection references a missing event')
+            total += len(event[1])
+            if total > 4 * MAX_BODY:
+                raise ValueError('Collection export exceeds 4 MiB decoded bodies')
+            fixtures.append({'version': 1, 'method': 'POST', 'headers': json.loads(event[0]),
+                             'body_base64': base64.b64encode(event[1]).decode('ascii')})
+    document = {'version': 1, 'name': name, 'fixtures': fixtures}
+    encoded = json.dumps(document, indent=2).encode('utf-8')
+    if len(encoded) > 8 * MAX_BODY:
+        raise ValueError('Collection export exceeds 8 MiB')
+    with open(path, 'xb') as output:
+        output.write(encoded)
+    return len(fixtures)
+
+
 def discover_fixtures(directory):
     """Nonrecursive, read-only discovery with no database or network effects."""
     paths = []
@@ -507,6 +532,9 @@ def main():
     bulk.add_argument('files', nargs='+')
     discover = commands.add_parser('discover', help='Validate local JSON fixture files without importing')
     discover.add_argument('directory')
+    bundle = commands.add_parser('export-collection', help='Export an ordered collection to a new portable bundle')
+    bundle.add_argument('name')
+    bundle.add_argument('file')
     args = parser.parse_args()
     if args.command == 'discover':
         result = discover_fixtures(args.directory)
@@ -574,6 +602,8 @@ def main():
         print(json.dumps({'name': args.name, 'event_ids': args.ids}))
     elif args.command == 'collections':
         print(json.dumps(store.collections(), indent=2))
+    elif args.command == 'export-collection':
+        print(json.dumps({'file': args.file, 'fixtures': export_collection(store, args.name, args.file)}))
     elif args.command == 'export':
         export_fixture(store, args.id, args.file)
         print(json.dumps({'file': args.file}))

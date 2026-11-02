@@ -28,3 +28,5 @@ Completed scoped milestone: atomic bulk fixture import. See README for exact sem
 Completed scoped follow-up: concurrent capture and storage failures. See README for acceptance scope and remaining limitations.
 
 Completed scoped follow-up: local fixture discovery. See README for precise behavior and remaining work.
+
+Completed scoped follow-up: portable collection export. See README for limitations and remaining work.

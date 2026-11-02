@@ -98,7 +98,7 @@ See [ROADMAP.md](ROADMAP.md) for planned work. MIT licensed. This prototype has 
 
 ## Named fixture collections
 
-Create an immutable, ordered event collection with `python3 hookreplay.py --db demo.sqlite collection checkout 2 1`. Discover collections with `collections`. Names use a letter followed by up to 63 letters, digits, underscores or hyphens. Collections reference 1–100 distinct existing event IDs in the same database; creation validates all members transactionally and never overwrites a name. No requests are sent. Portable collection export remains future work; atomic bulk fixture import is available as described below.
+Create an immutable, ordered event collection with `python3 hookreplay.py --db demo.sqlite collection checkout 2 1`. Discover collections with `collections`. Names use a letter followed by up to 63 letters, digits, underscores or hyphens. Collections reference 1–100 distinct existing event IDs in the same database; creation validates all members transactionally and never overwrites a name. No requests are sent. Portable collection export and atomic bulk fixture import are available as described below; collection-bundle import remains future work.
 
 ## Installable command
 
@@ -115,3 +115,7 @@ The listener backlog is explicitly 64 to accommodate small simultaneous local ba
 ## Local fixture discovery
 
 `hookreplay discover DIRECTORY` scans only that directory for regular `.json` files, validates the existing portable fixture format, and reports sorted filenames, validity and decoded body sizes. It does not open a database or import anything. Exit 1 means at least one invalid fixture. At most 100 JSON files and 1000 directory entries are accepted; excess fails rather than silently omitting results. Subdirectories and symlinks are skipped. This is intended for an ordinary local fixture folder, not an adversarial filesystem.
+
+## Portable collection export
+
+`hookreplay --db demo.sqlite export-collection NAME NEW.json` exports an ordered version-1 bundle with the collection name and inline version-1 fixtures. Database event IDs are deliberately omitted; binary bodies and selected headers are preserved. The total decoded body budget is 4 MiB and the encoded file budget is 8 MiB. Validation/encoding precedes exclusive file creation, so existing destinations are never overwritten. Storage failures may leave a partial new file. Bundle import and atomic publication remain future work; individual fixtures retain their existing import command.
