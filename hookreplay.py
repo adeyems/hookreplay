@@ -1,5 +1,6 @@
 """Local synthetic webhook capture and replay. Python 3.10+, no dependencies."""
 import argparse
+import os
 import base64
 import difflib
 import re
@@ -17,6 +18,28 @@ MAX_BODY = 1024 * 1024
 SAFE_HEADERS = {'content-type', 'x-event-type'}
 MAX_FIXTURE = 2 * MAX_BODY
 MAX_RESPONSE = 64 * 1024
+
+
+def discover_fixtures(directory):
+    """Nonrecursive, read-only discovery with no database or network effects."""
+    paths = []
+    with os.scandir(directory) as entries:
+        for count, entry in enumerate(entries, 1):
+            if count > 1000:
+                raise ValueError('Discovery directory exceeds 1000 entries')
+            if entry.name.endswith('.json') and entry.is_file(follow_symlinks=False):
+                paths.append((entry.name, entry.path))
+                if len(paths) > 100:
+                    raise ValueError('Discovery exceeds 100 JSON fixtures')
+    fixtures = []
+    for name, path in sorted(paths):
+        try:
+            headers, body = read_fixture(path)
+        except (ValueError, OSError, RecursionError):
+            fixtures.append({'file': name, 'valid': False})
+        else:
+            fixtures.append({'file': name, 'valid': True, 'body_bytes': len(body)})
+    return {'version': 1, 'fixtures': fixtures, 'recursive': False}
 
 
 def export_fixture(store, event_id, path):
@@ -482,7 +505,15 @@ def main():
     commands.add_parser('collections', help='Discover saved fixture collections')
     bulk = commands.add_parser('import-many', help='Atomically import 1–100 fixtures in argument order')
     bulk.add_argument('files', nargs='+')
+    discover = commands.add_parser('discover', help='Validate local JSON fixture files without importing')
+    discover.add_argument('directory')
     args = parser.parse_args()
+    if args.command == 'discover':
+        result = discover_fixtures(args.directory)
+        print(json.dumps(result, indent=2))
+        if any(not item['valid'] for item in result['fixtures']):
+            raise SystemExit(1)
+        return
     if args.command == 'profile':
         result = save_profile(args.file, args.json_mode, args.ignore)
         print(json.dumps({'file': args.file, **result}))

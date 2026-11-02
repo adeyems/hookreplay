@@ -13,7 +13,7 @@ Remaining work estimates are rough engineering estimates, not time already worke
 - Completed: versioned comparison profiles, validation and CLI reuse.
 - Completed: bounded readable text diffs and persistent named baseline selection.
 - Completed: portable JSON fixture export/import, version 1 format, byte preservation and validation.
-- Named fixture collections, discovery and bulk import: 3-5 hours.
+- Completed: named fixture collections, bounded local fixture discovery and atomic bulk import.
 - Local request/replay review UI and end-to-end tests: 10-16 hours.
 - Documentation, concurrent capture testing and packaging: 5-8 hours.
 
@@ -26,3 +26,5 @@ Completed packaging slice: installable wheel and console entry point with isolat
 Completed scoped milestone: atomic bulk fixture import. See README for exact semantics and remaining limitations.
 
 Completed scoped follow-up: concurrent capture and storage failures. See README for acceptance scope and remaining limitations.
+
+Completed scoped follow-up: local fixture discovery. See README for precise behavior and remaining work.

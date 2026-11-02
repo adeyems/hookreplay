@@ -98,7 +98,7 @@ See [ROADMAP.md](ROADMAP.md) for planned work. MIT licensed. This prototype has 
 
 ## Named fixture collections
 
-Create an immutable, ordered event collection with `python3 hookreplay.py --db demo.sqlite collection checkout 2 1`. Discover collections with `collections`. Names use a letter followed by up to 63 letters, digits, underscores or hyphens. Collections reference 1–100 distinct existing event IDs in the same database; creation validates all members transactionally and never overwrites a name. No requests are sent. Portable collection export and bulk import remain future work.
+Create an immutable, ordered event collection with `python3 hookreplay.py --db demo.sqlite collection checkout 2 1`. Discover collections with `collections`. Names use a letter followed by up to 63 letters, digits, underscores or hyphens. Collections reference 1–100 distinct existing event IDs in the same database; creation validates all members transactionally and never overwrites a name. No requests are sent. Portable collection export remains future work; atomic bulk fixture import is available as described below.
 
 ## Installable command
 
@@ -111,3 +111,7 @@ From this checkout, run `python3 -m pip install .` in a virtual environment. The
 ## Concurrent capture and storage failures
 
 The listener backlog is explicitly 64 to accommodate small simultaneous local batches. The threaded capture endpoint is tested with 24 distinct binary payloads across eight concurrent clients, including reopening the database and checking unique IDs and byte preservation. SQLite storage errors return HTTP 503 with a generic message instead of closing the connection without a response. No successful capture is acknowledged before its transaction completes. This is correctness coverage, not a throughput guarantee; SQLite contention may still fail after its busy timeout. Clients must account for uncertain delivery if a connection drops after commit.
+
+## Local fixture discovery
+
+`hookreplay discover DIRECTORY` scans only that directory for regular `.json` files, validates the existing portable fixture format, and reports sorted filenames, validity and decoded body sizes. It does not open a database or import anything. Exit 1 means at least one invalid fixture. At most 100 JSON files and 1000 directory entries are accepted; excess fails rather than silently omitting results. Subdirectories and symlinks are skipped. This is intended for an ordinary local fixture folder, not an adversarial filesystem.
