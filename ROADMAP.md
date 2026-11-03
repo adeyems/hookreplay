@@ -32,3 +32,5 @@ Completed scoped follow-up: local fixture discovery. See README for precise beha
 Completed scoped follow-up: portable collection export. See README for limitations and remaining work.
 
 Completed scoped follow-up: deterministic replay scenarios. See README for remaining limitations.
+
+Completed cancellation slice: Ctrl-C replay evidence and connection cleanup. Durable in-progress records, process-crash recovery and scenario resumption remain unimplemented; reassess remaining estimates before submission.

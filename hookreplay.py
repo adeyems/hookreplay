@@ -486,6 +486,10 @@ def replay(store, event_id, target):
         store.record_attempt(event_id, target, status=status, headers=headers,
                              body=body[:MAX_RESPONSE], complete=complete)
         return status
+    except KeyboardInterrupt:
+        store.record_attempt(event_id, target, status=status, error='Replay interrupted; delivery unknown',
+                             headers=headers, body=body, complete=False)
+        raise
     except (OSError, http.client.HTTPException) as error:
         if isinstance(error, http.client.IncompleteRead):
             body = error.partial[:MAX_RESPONSE]
